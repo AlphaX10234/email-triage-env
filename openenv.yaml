@@ -1,0 +1,113 @@
+name: email-triage-env
+version: "1.0.0"
+description: >
+  A real-world email triage environment where AI agents must read incoming emails,
+  assign correct priorities (urgent/high/normal/low/spam), categorize them
+  (billing, legal, technical_support, etc.), and decide the appropriate action
+  (reply, forward, archive, delete, escalate, flag).
+  Useful for training and evaluating agents on enterprise inbox management.
+
+author: Hussanpreet Soni
+tags:
+  - openenv
+  - email
+  - triage
+  - nlp
+  - real-world
+  - classification
+
+tasks:
+  - id: task_1_easy
+    name: Basic Email Triage
+    difficulty: easy
+    description: Triage clearly categorized emails with unambiguous signals.
+    num_steps: 5
+    passing_threshold: 0.70
+
+  - id: task_2_medium
+    name: Nuanced Email Routing
+    difficulty: medium
+    description: Handle emails requiring reading comprehension and nuanced routing decisions.
+    num_steps: 5
+    passing_threshold: 0.60
+
+  - id: task_3_hard
+    name: Complex and Ambiguous Triage
+    difficulty: hard
+    description: Triage high-stakes, ambiguous, multi-dimensional emails requiring expert judgment.
+    num_steps: 5
+    passing_threshold: 0.50
+
+observation_space:
+  type: object
+  fields:
+    - name: email
+      type: Email
+      description: The email to triage (id, subject, sender, body, received_at, has_attachment, thread_length)
+    - name: inbox_size
+      type: integer
+      description: Number of emails remaining in inbox
+    - name: step_number
+      type: integer
+      description: Current step index
+    - name: max_steps
+      type: integer
+      description: Total steps in episode
+    - name: previous_action
+      type: object | null
+      description: The last action taken (or null on first step)
+    - name: task_id
+      type: string
+      description: Which task is being evaluated
+    - name: context
+      type: string | null
+      description: Human-readable task context hint
+
+action_space:
+  type: object
+  fields:
+    - name: priority
+      type: enum[urgent, high, normal, low, spam]
+      description: Priority to assign to the email
+    - name: category
+      type: enum[customer_complaint, billing, technical_support, general_inquiry, spam, internal, sales, legal]
+      description: Category classification of the email
+    - name: action
+      type: enum[reply, forward, archive, delete, escalate, flag]
+      description: Action to take on the email
+    - name: assign_to
+      type: string | null
+      description: Team or person to assign/forward to
+    - name: reply_draft
+      type: string | null
+      description: Draft reply text (optional, for reply action)
+    - name: reason
+      type: string | null
+      description: Agent's explanation for its decision
+
+reward_function:
+  type: dense
+  range: [0.0, 1.0]
+  components:
+    - priority_score: 35% weight, partial credit for adjacent priorities
+    - category_score: 35% weight, exact match required (minor partial for spam)
+    - action_score: 30% weight, based on compatibility with category
+  bonuses:
+    - +0.05 for perfect triage (all three components correct)
+  penalties:
+    - -0.10 for missed spam
+    - -0.20 for misclassifying urgent as low/spam
+
+api:
+  endpoints:
+    - POST /reset
+    - POST /step
+    - GET /state
+    - GET /health
+    - GET /tasks
+  framework: FastAPI
+
+deployment:
+  platform: huggingface-spaces
+  sdk: docker
+  port: 7860

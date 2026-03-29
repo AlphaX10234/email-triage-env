@@ -1,0 +1,209 @@
+"""
+inference.py — Baseline inference script for Email Triage OpenEnv.
+
+Uses the OpenAI client to run a model against all 3 tasks.
+Reads credentials from environment variables.
+
+Usage:
+    export API_BASE_URL=https://api.openai.com/v1
+    export MODEL_NAME=gpt-4o-mini
+    export HF_TOKEN=your_token_here
+    python inference.py
+"""
+import os
+import json
+import time
+import requests
+from openai import OpenAI
+
+# ── Configuration ────────────────────────────────────────────────────────────
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
+ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://localhost:7860")
+
+TASKS = ["task_1_easy", "task_2_medium", "task_3_hard"]
+
+client = OpenAI(
+    api_key=HF_TOKEN or "dummy",
+    base_url=API_BASE_URL,
+)
+
+SYSTEM_PROMPT = """You are an expert email triage assistant. Your job is to:
+1. Read each email carefully
+2. Assign it the correct PRIORITY: urgent, high, normal, low, or spam
+3. Assign the correct CATEGORY: customer_complaint, billing, technical_support, general_inquiry, spam, internal, sales, or legal
+4. Choose the best ACTION: reply, forward, archive, delete, escalate, or flag
+5. Optionally specify assign_to (who to route it to)
+6. Optionally write a brief reply_draft if action is "reply"
+7. Always explain your reason briefly
+
+You MUST respond with valid JSON only, in this exact format:
+{
+  "priority": "urgent|high|normal|low|spam",
+  "category": "customer_complaint|billing|technical_support|general_inquiry|spam|internal|sales|legal",
+  "action": "reply|forward|archive|delete|escalate|flag",
+  "assign_to": "team_name or null",
+  "reply_draft": "draft text or null",
+  "reason": "brief explanation"
+}"""
+
+
+def call_llm(email_obs: dict) -> dict:
+    """Call the LLM to triage one email. Returns parsed action dict."""
+    email = email_obs["email"]
+    user_message = f"""Please triage this email:
+
+Subject: {email['subject']}
+From: {email['sender']}
+Received: {email['received_at']}
+Has Attachment: {email['has_attachment']}
+Thread Length: {email['thread_length']}
+
+Body:
+{email['body']}
+
+Context: {email_obs.get('context', '')}
+
+Respond with JSON only."""
+
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+        temperature=0.0,
+        max_tokens=500,
+    )
+
+    content = response.choices[0].message.content.strip()
+    # Strip markdown code fences if present
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+    content = content.strip()
+
+    return json.loads(content)
+
+
+def run_task(task_id: str) -> dict:
+    """Run the full task and return results."""
+    print(f"\n{'='*60}")
+    print(f"  Task: {task_id}")
+    print(f"{'='*60}")
+
+    # Reset the environment
+    reset_resp = requests.post(
+        f"{ENV_BASE_URL}/reset",
+        json={"task_id": task_id, "session_id": task_id},
+    )
+    reset_resp.raise_for_status()
+    data = reset_resp.json()
+    obs = data["observation"]
+
+    step_scores = []
+    step_num = 0
+
+    while True:
+        step_num += 1
+        email_subject = obs["email"]["subject"]
+        print(f"\n  Step {step_num} | Email: '{email_subject[:50]}...' " if len(email_subject) > 50 else f"\n  Step {step_num} | Email: '{email_subject}'")
+
+        # Get action from LLM
+        try:
+            action = call_llm(obs)
+        except Exception as e:
+            print(f"    LLM error: {e}. Using fallback action.")
+            action = {
+                "priority": "normal",
+                "category": "general_inquiry",
+                "action": "archive",
+                "assign_to": None,
+                "reply_draft": None,
+                "reason": "Fallback due to LLM error",
+            }
+
+        print(f"    → priority={action.get('priority')} | category={action.get('category')} | action={action.get('action')}")
+
+        # Send action to environment
+        step_resp = requests.post(
+            f"{ENV_BASE_URL}/step",
+            json={"action": action, "session_id": task_id},
+        )
+        step_resp.raise_for_status()
+        step_data = step_resp.json()
+
+        reward = step_data["reward"]
+        done = step_data["done"]
+        info = step_data["info"]
+
+        print(f"    Score: {reward['score']:.3f} | {reward['feedback'][:80]}")
+        step_scores.append(reward["score"])
+
+        if done:
+            avg = sum(step_scores) / len(step_scores)
+            passed = avg >= info["passing_threshold"]
+            print(f"\n  Task complete! Avg score: {avg:.4f} | {'✅ PASSED' if passed else '❌ FAILED'}")
+            return {
+                "task_id": task_id,
+                "step_scores": step_scores,
+                "avg_score": round(avg, 4),
+                "passed": passed,
+                "passing_threshold": info["passing_threshold"],
+            }
+
+        obs = step_data["observation"]
+        time.sleep(0.5)  # Rate limiting
+
+
+def main():
+    print("\n" + "="*60)
+    print("  Email Triage OpenEnv — Baseline Inference Script")
+    print(f"  Model: {MODEL_NAME}")
+    print(f"  API: {API_BASE_URL}")
+    print("="*60)
+
+    # Health check
+    try:
+        health = requests.get(f"{ENV_BASE_URL}/health", timeout=10)
+        health.raise_for_status()
+        print(f"\n✓ Environment healthy at {ENV_BASE_URL}")
+    except Exception as e:
+        print(f"\n✗ Cannot reach environment at {ENV_BASE_URL}: {e}")
+        print("  Make sure the server is running: uvicorn app:app --port 7860")
+        return
+
+    results = []
+    for task_id in TASKS:
+        result = run_task(task_id)
+        results.append(result)
+
+    # Final summary
+    print("\n" + "="*60)
+    print("  FINAL RESULTS SUMMARY")
+    print("="*60)
+    overall_scores = []
+    for r in results:
+        status = "✅ PASSED" if r["passed"] else "❌ FAILED"
+        print(f"  {r['task_id']:25s} | Score: {r['avg_score']:.4f} | {status}")
+        overall_scores.append(r["avg_score"])
+
+    overall_avg = sum(overall_scores) / len(overall_scores)
+    print(f"\n  Overall average score: {overall_avg:.4f}")
+    print("="*60)
+
+    # Save results to file
+    with open("baseline_results.json", "w") as f:
+        json.dump({
+            "model": MODEL_NAME,
+            "api_base_url": API_BASE_URL,
+            "results": results,
+            "overall_avg": round(overall_avg, 4),
+        }, f, indent=2)
+    print("\n  Results saved to baseline_results.json")
+
+
+if __name__ == "__main__":
+    main()

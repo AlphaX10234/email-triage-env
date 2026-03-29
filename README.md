@@ -222,8 +222,4 @@ email-triage-env/
 - ✅ Baseline `inference.py` using OpenAI client
 - ✅ Dockerfile + HuggingFace Spaces deployment
 
----
 
-## 👤 Author
-
-Hussanpreet Soni — OpenEnv Hackathon 2024

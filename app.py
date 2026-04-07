@@ -59,7 +59,9 @@ def health():
 
 
 @app.post("/reset")
-def reset(req: ResetRequest):
+def reset(req: ResetRequest = None):
+    if req is None:
+        req = ResetRequest()
     """Reset the environment and return the first observation."""
     env = EmailTriageEnv(task_id=req.task_id)
     _envs[req.session_id] = env

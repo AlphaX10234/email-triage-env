@@ -139,16 +139,19 @@ def run_task(task_id: str) -> dict:
             raise
 
         step_data = step_resp.json()
-        reward    = step_data["reward"]
-        done      = step_data["done"]
-        info      = step_data["info"]
+        reward    = step_data.get("reward", {})
+        done      = step_data.get("done", False)
+        info      = step_data.get("info", {})
 
-        print(f"    Score: {reward['score']:.3f} | {reward['feedback'][:80]}")
-        step_scores.append(reward["score"])
+        score    = reward.get("score", 0.0)
+        feedback = reward.get("feedback", "")
+        print(f"    Score: {score:.3f} | {str(feedback)[:80]}")
+        step_scores.append(score)
 
         if done:
-            avg    = sum(step_scores) / len(step_scores)
-            passed = avg >= info["passing_threshold"]
+            avg               = sum(step_scores) / len(step_scores) if step_scores else 0.0
+            passing_threshold = info.get("passing_threshold", 0.5)
+            passed            = avg >= passing_threshold
             print(f"\n  Task complete! Avg score: {avg:.4f} | "
                   f"{'✅ PASSED' if passed else '❌ FAILED'}")
             return {
@@ -156,10 +159,10 @@ def run_task(task_id: str) -> dict:
                 "step_scores":       step_scores,
                 "avg_score":         round(avg, 4),
                 "passed":            passed,
-                "passing_threshold": info["passing_threshold"],
+                "passing_threshold": passing_threshold,
             }
 
-        obs = step_data["observation"]
+        obs = step_data.get("observation", obs)
         time.sleep(0.5)
 
 
@@ -217,7 +220,7 @@ def main():
         print(f"  {r['task_id']:25s} | Score: {r['avg_score']:.4f} | {status}")
         overall_scores.append(r["avg_score"])
 
-    overall_avg = sum(overall_scores) / len(overall_scores)
+    overall_avg = sum(overall_scores) / len(overall_scores) if overall_scores else 0.0
     print(f"\n  Overall average score: {overall_avg:.4f}")
     print("="*60)
 

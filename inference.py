@@ -1,14 +1,5 @@
 """
 inference.py — Baseline inference script for Email Triage OpenEnv.
-
-Uses the OpenAI client to run a model against all 3 tasks.
-Reads credentials from environment variables.
-
-Usage:
-    export API_BASE_URL=https://api.openai.com/v1
-    export MODEL_NAME=gpt-4o-mini
-    export HF_TOKEN=your_token_here
-    python inference.py
 """
 import os
 import json
@@ -17,25 +8,21 @@ import time
 import requests
 import subprocess
 
-# Force correct versions at runtime
+# Force correct httpx version at runtime
 subprocess.run(
     [sys.executable, "-m", "pip", "install",
      "httpx==0.27.2", "openai==1.54.0", "-q", "--force-reinstall"],
     check=True
 )
 
-
-# ── Configuration ────────────────────────────────────────────────────────────
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME   = os.environ.get("MODEL_NAME",   "gpt-4o-mini")
+# ── Configuration ─────────────────────────────────────────────────────────────
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://api-inference.huggingface.co/v1")
+MODEL_NAME   = os.environ.get("MODEL_NAME",   "meta-llama/Llama-3.1-8B-Instruct")
 HF_TOKEN     = os.environ.get("HF_TOKEN",     "")
 ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://localhost:7860")
 
 TASKS = ["task_1_easy", "task_2_medium", "task_3_hard"]
 
-# ── OpenAI client — initialized lazily inside main() ─────────────────────────
-# DO NOT instantiate at module level; the validator imports this file and any
-# crash here produces a non-zero exit before main() is ever called.
 client = None  # set in main()
 
 SYSTEM_PROMPT = """You are an expert email triage assistant. Your job is to:
@@ -68,7 +55,6 @@ FALLBACK_ACTION = {
 
 
 def call_llm(email_obs: dict) -> dict:
-    """Call the LLM to triage one email. Returns parsed action dict."""
     email = email_obs["email"]
     user_message = f"""Please triage this email:
 
@@ -96,23 +82,19 @@ Respond with JSON only."""
     )
 
     content = response.choices[0].message.content.strip()
-    # Strip markdown code fences if present
     if content.startswith("```"):
         content = content.split("```")[1]
         if content.startswith("json"):
             content = content[4:]
     content = content.strip()
-
     return json.loads(content)
 
 
 def run_task(task_id: str) -> dict:
-    """Run the full task loop and return results."""
     print(f"\n{'='*60}")
     print(f"  Task: {task_id}")
     print(f"{'='*60}")
 
-    # Reset the environment
     try:
         reset_resp = requests.post(
             f"{ENV_BASE_URL}/reset",
@@ -136,7 +118,6 @@ def run_task(task_id: str) -> dict:
         display = email_subject[:50] + "..." if len(email_subject) > 50 else email_subject
         print(f"\n  Step {step_num} | Email: '{display}'")
 
-        # Get action from LLM, fall back gracefully on any error
         try:
             action = call_llm(obs)
         except Exception as e:
@@ -146,7 +127,6 @@ def run_task(task_id: str) -> dict:
         print(f"    → priority={action.get('priority')} | "
               f"category={action.get('category')} | action={action.get('action')}")
 
-        # Send action to environment
         try:
             step_resp = requests.post(
                 f"{ENV_BASE_URL}/step",
@@ -180,7 +160,7 @@ def run_task(task_id: str) -> dict:
             }
 
         obs = step_data["observation"]
-        time.sleep(0.5)  # polite rate limiting
+        time.sleep(0.5)
 
 
 def main():
@@ -192,22 +172,16 @@ def main():
     print(f"  API:   {API_BASE_URL}")
     print("="*60)
 
-    # ── Validate required env vars ────────────────────────────────────────────
     if not HF_TOKEN:
         print("\n[ERROR] HF_TOKEN environment variable is not set.", file=sys.stderr)
-        print("  Set it with: export HF_TOKEN=your_token_here", file=sys.stderr)
         sys.exit(1)
 
-    # ── Initialise OpenAI client (inside main, NOT at module level) ───────────
-   try:
-        import subprocess
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "httpx==0.27.2", "-q"],
-            check=True
-        )
+    if not MODEL_NAME:
+        print("\n[ERROR] MODEL_NAME environment variable is not set.", file=sys.stderr)
+        sys.exit(1)
+
+    try:
         from openai import OpenAI
-        import importlib, httpx
-        importlib.reload(httpx)
         client = OpenAI(
             api_key=HF_TOKEN,
             base_url=API_BASE_URL,
@@ -217,17 +191,14 @@ def main():
         print(f"\n[ERROR] Failed to initialise OpenAI client: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # ── Environment health check ──────────────────────────────────────────────
     try:
         health = requests.get(f"{ENV_BASE_URL}/health", timeout=10)
         health.raise_for_status()
         print(f"✓ Environment healthy at {ENV_BASE_URL}")
     except Exception as e:
         print(f"\n[ERROR] Cannot reach environment at {ENV_BASE_URL}: {e}", file=sys.stderr)
-        print("  Make sure the server is running: uvicorn app:app --port 7860", file=sys.stderr)
         sys.exit(1)
 
-    # ── Run all tasks ─────────────────────────────────────────────────────────
     results = []
     for task_id in TASKS:
         try:
@@ -237,7 +208,6 @@ def main():
             sys.exit(1)
         results.append(result)
 
-    # ── Final summary ─────────────────────────────────────────────────────────
     print("\n" + "="*60)
     print("  FINAL RESULTS SUMMARY")
     print("="*60)
@@ -251,12 +221,11 @@ def main():
     print(f"\n  Overall average score: {overall_avg:.4f}")
     print("="*60)
 
-    # Save results
     output = {
-        "model":         MODEL_NAME,
-        "api_base_url":  API_BASE_URL,
-        "results":       results,
-        "overall_avg":   round(overall_avg, 4),
+        "model":        MODEL_NAME,
+        "api_base_url": API_BASE_URL,
+        "results":      results,
+        "overall_avg":  round(overall_avg, 4),
     }
     with open("baseline_results.json", "w") as f:
         json.dump(output, f, indent=2)

@@ -33,7 +33,6 @@ SYSTEM_PROMPT = """You are an expert email triage assistant. Your job is to:
 5. Optionally specify assign_to (who to route it to)
 6. Optionally write a brief reply_draft if action is "reply"
 7. Always explain your reason briefly
-
 You MUST respond with valid JSON only, in this exact format:
 {
   "priority": "urgent|high|normal|low|spam",
@@ -57,18 +56,14 @@ FALLBACK_ACTION = {
 def call_llm(email_obs: dict) -> dict:
     email = email_obs["email"]
     user_message = f"""Please triage this email:
-
 Subject: {email['subject']}
 From: {email['sender']}
 Received: {email['received_at']}
 Has Attachment: {email['has_attachment']}
 Thread Length: {email['thread_length']}
-
 Body:
 {email['body']}
-
 Context: {email_obs.get('context', '')}
-
 Respond with JSON only."""
 
     response = client.chat.completions.create(
@@ -109,6 +104,9 @@ def run_task(task_id: str) -> dict:
     data = reset_resp.json()
     obs  = data["observation"]
 
+    # ── Structured output: task start ─────────────────────────────────────────
+    print(f"[START] task={task_id}", flush=True)
+
     step_scores = []
     step_num    = 0
 
@@ -124,7 +122,7 @@ def run_task(task_id: str) -> dict:
             print(f"    LLM error: {e}. Using fallback action.", file=sys.stderr)
             action = FALLBACK_ACTION.copy()
 
-        print(f"    → priority={action.get('priority')} | "
+        print(f"    -> priority={action.get('priority')} | "
               f"category={action.get('category')} | action={action.get('action')}")
 
         try:
@@ -148,12 +146,19 @@ def run_task(task_id: str) -> dict:
         print(f"    Score: {score:.3f} | {str(feedback)[:80]}")
         step_scores.append(score)
 
+        # ── Structured output: step ───────────────────────────────────────────
+        print(f"[STEP] step={step_num} reward={score:.4f}", flush=True)
+
         if done:
             avg               = sum(step_scores) / len(step_scores) if step_scores else 0.0
             passing_threshold = info.get("passing_threshold", 0.5)
             passed            = avg >= passing_threshold
             print(f"\n  Task complete! Avg score: {avg:.4f} | "
-                  f"{'✅ PASSED' if passed else '❌ FAILED'}")
+                  f"{'PASSED' if passed else 'FAILED'}")
+
+            # ── Structured output: task end ───────────────────────────────────
+            print(f"[END] task={task_id} score={avg:.4f} steps={step_num}", flush=True)
+
             return {
                 "task_id":           task_id,
                 "step_scores":       step_scores,
@@ -216,7 +221,7 @@ def main():
     print("="*60)
     overall_scores = []
     for r in results:
-        status = "✅ PASSED" if r["passed"] else "❌ FAILED"
+        status = "PASSED" if r["passed"] else "FAILED"
         print(f"  {r['task_id']:25s} | Score: {r['avg_score']:.4f} | {status}")
         overall_scores.append(r["avg_score"])
 

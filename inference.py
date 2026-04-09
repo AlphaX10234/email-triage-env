@@ -190,8 +190,15 @@ def main():
         sys.exit(1)
 
     # ── Initialise OpenAI client (inside main, NOT at module level) ───────────
-    try:
+   try:
+        import subprocess
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "httpx==0.27.2", "-q"],
+            check=True
+        )
         from openai import OpenAI
+        import importlib, httpx
+        importlib.reload(httpx)
         client = OpenAI(
             api_key=HF_TOKEN,
             base_url=API_BASE_URL,

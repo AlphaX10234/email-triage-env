@@ -15,6 +15,15 @@ import json
 import sys
 import time
 import requests
+import subprocess
+
+# Force correct versions at runtime
+subprocess.run(
+    [sys.executable, "-m", "pip", "install",
+     "httpx==0.27.2", "openai==1.54.0", "-q", "--force-reinstall"],
+    check=True
+)
+
 
 # ── Configuration ────────────────────────────────────────────────────────────
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
